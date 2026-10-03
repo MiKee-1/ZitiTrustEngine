@@ -1,0 +1,199 @@
+services:
+  # ---------------------------------------------------------------------
+  # Ziti controller: together with the router, the only component with an
+  # interface on both "ot" and "it". The Edge Client API (1280) stays
+  # reachable from both networks: the gateways need it for the dial. The
+  # Edge Management API (1281) is bound ONLY on the controller's IP on the
+  # "it" network: from "ot" it's not even reachable at the TCP level (see
+  # ziti/controller/).
+  # ---------------------------------------------------------------------
+  ziti-controller:
+    build:
+      context: ./ziti/controller
+      args:
+        ZITI_VERSION: ${ZITI_VERSION}
+    healthcheck:
+      test: curl -m 1 -s -k https://${ZITI_CTRL_EDGE_ADVERTISED_ADDRESS}:${ZITI_CTRL_EDGE_ADVERTISED_PORT}/edge/client/v1/version
+      start_period: 30s
+      interval: 2s
+      timeout: 3s
+      retries: 40
+    env_file: [./.env]
+    environment:
+      - ZITI_CTRL_NAME=${ZITI_CTRL_NAME}
+      - ZITI_CTRL_EDGE_ADVERTISED_ADDRESS=${ZITI_CTRL_EDGE_ADVERTISED_ADDRESS}
+      - ZITI_CTRL_EDGE_ADVERTISED_PORT=${ZITI_CTRL_EDGE_ADVERTISED_PORT}
+      - ZITI_CTRL_ADVERTISED_ADDRESS=${ZITI_CTRL_ADVERTISED_ADDRESS}
+      - ZITI_CTRL_ADVERTISED_PORT=${ZITI_CTRL_ADVERTISED_PORT}
+      - ZITI_EDGE_IDENTITY_ENROLLMENT_DURATION=${ZITI_EDGE_IDENTITY_ENROLLMENT_DURATION}
+      - ZITI_ROUTER_ENROLLMENT_DURATION=${ZITI_ROUTER_ENROLLMENT_DURATION}
+      - ZITI_USER=${ZITI_USER}
+      - ZITI_PWD=${ZITI_PWD}
+      # dedicated bind point for the Edge Management API: controller's "it" IP only
+      - ZITI_CTRL_MGMT_BIND=${CTRL_IT_IP}:${ZITI_CTRL_MGMT_PORT}
+      # adds the controller's "it" IP to the server certificate's SANs (otherwise the
+      # bind point above fails TLS validation at startup)
+      - ZITI_CTRL_EDGE_IP_OVERRIDE=${CTRL_IT_IP}
+    ports:
+      - 127.0.0.1:${ZITI_CTRL_EDGE_ADVERTISED_PORT}:${ZITI_CTRL_EDGE_ADVERTISED_PORT}
+    networks:
+      ot:
+        ipv4_address: ${CTRL_OT_IP}
+        aliases: [ziti-controller]
+      it:
+        ipv4_address: ${CTRL_IT_IP}
+        aliases: [ziti-controller]
+    volumes:
+      - ziti-fs:/persistent
+
+  # ---------------------------------------------------------------------
+  # Public edge router: the only router in this lab. Must sit on both
+  # networks because it's the one carrying the Ziti data channel (3022)
+  # all the way to the gateways on the ot network.
+  # ---------------------------------------------------------------------
+  ziti-router:
+    build:
+      context: ./ziti/router
+      args:
+        ZITI_VERSION: ${ZITI_VERSION}
+    env_file: [./.env]
+    depends_on:
+      ziti-controller:
+        condition: service_healthy
+    environment:
+      - ZITI_CTRL_ADVERTISED_ADDRESS=${ZITI_CTRL_ADVERTISED_ADDRESS}
+      - ZITI_CTRL_ADVERTISED_PORT=${ZITI_CTRL_ADVERTISED_PORT}
+      - ZITI_CTRL_EDGE_ADVERTISED_ADDRESS=${ZITI_CTRL_EDGE_ADVERTISED_ADDRESS}
+      - ZITI_CTRL_EDGE_ADVERTISED_PORT=${ZITI_CTRL_EDGE_ADVERTISED_PORT}
+      - ZITI_ROUTER_NAME=${ZITI_ROUTER_NAME}
+      - ZITI_ROUTER_ADVERTISED_ADDRESS=${ZITI_ROUTER_ADVERTISED_ADDRESS}
+      - ZITI_ROUTER_PORT=${ZITI_ROUTER_PORT}
+      - ZITI_ROUTER_LISTENER_BIND_PORT=${ZITI_ROUTER_LISTENER_BIND_PORT}
+      - ZITI_ROUTER_ROLES=${ZITI_ROUTER_ROLES}
+    networks:
+      ot:
+        ipv4_address: ${ROUTER_OT_IP}
+        aliases: [ziti-router]
+      it:
+        ipv4_address: ${ROUTER_IT_IP}
+        aliases: [ziti-router]
+    volumes:
+      - ziti-fs:/persistent
+    command: ["edge"]
+
+  # ---------------------------------------------------------------------
+  # One-shot setup: identities, the "historian" service, policies. Talks
+  # ONLY to the controller's Edge Management API (1281), on the "it"
+  # network.
+  # ---------------------------------------------------------------------
+  ziti-setup:
+    image: "${ZITI_IMAGE}:${ZITI_VERSION}"
+    user: root
+    env_file: [./.env]
+    depends_on:
+      ziti-controller:
+        condition: service_healthy
+      ziti-router:
+        condition: service_started
+    environment:
+      - ZITI_CTRL_MGMT_ADDR=https://${ZITI_CTRL_EDGE_ADVERTISED_ADDRESS}:${ZITI_CTRL_MGMT_PORT}
+      - ZITI_USER=${ZITI_USER}
+      - ZITI_PWD=${ZITI_PWD}
+      - ZITI_ROUTER_NAME=${ZITI_ROUTER_NAME}
+    networks:
+      it:
+        aliases: [ziti-setup]
+    volumes:
+      - ziti-identities:/identities
+      - ./ziti/setup/setup.sh:/setup.sh:ro
+    entrypoint: ["bash", "/setup.sh"]
+
+  # ---------------------------------------------------------------------
+  # ziti-host: server-side tunneler. Publishes (binds) the "historian"
+  # service into the rest of the Ziti overlay. Sits ONLY on the "it"
+  # network: it doesn't have, and doesn't need, any interface on "ot".
+  # ---------------------------------------------------------------------
+  ziti-host:
+    image: openziti/ziti-host:latest
+    depends_on:
+      ziti-setup:
+        condition: service_completed_successfully
+    environment:
+      - ZITI_IDENTITY_BASENAME=ziti-host
+    volumes:
+      - ziti-identities:/ziti-edge-tunnel
+    networks:
+      it:
+        ipv4_address: ${ZITI_HOST_IT_IP}
+        aliases: [ziti-host]
+
+  # ---------------------------------------------------------------------
+  # Historian: data store, "it" network only. No port published on the
+  # host: reachable only from within the "it" network (by ziti-host) or
+  # via Ziti dial (by the gateways).
+  # ---------------------------------------------------------------------
+  historian:
+    build: ./historian
+    networks:
+      it:
+        ipv4_address: ${HISTORIAN_IT_IP}
+        aliases: [historian]
+    volumes:
+      - historian-data:/data
+
+  # ---------------------------------------------------------------------
+  # Gateways: "ot" network only. Verify that the historian is unreachable
+  # directly and that dialing the Ziti "historian" service works.
+  # ---------------------------------------------------------------------
+  gateway-a:
+    build: ./gateway
+    depends_on:
+      ziti-setup:
+        condition: service_completed_successfully
+      historian:
+        condition: service_started
+    environment:
+      - GATEWAY_ID=gateway-a
+      - HISTORIAN_IP=${HISTORIAN_IT_IP}
+      - HISTORIAN_PORT=5000
+    volumes:
+      - ziti-identities:/identities:ro
+    networks:
+      ot:
+        ipv4_address: ${GATEWAY_A_OT_IP}
+        aliases: [gateway-a]
+
+  gateway-b:
+    build: ./gateway
+    depends_on:
+      ziti-setup:
+        condition: service_completed_successfully
+      historian:
+        condition: service_started
+    environment:
+      - GATEWAY_ID=gateway-b
+      - HISTORIAN_IP=${HISTORIAN_IT_IP}
+      - HISTORIAN_PORT=5000
+    volumes:
+      - ziti-identities:/identities:ro
+    networks:
+      ot:
+        ipv4_address: ${GATEWAY_B_OT_IP}
+        aliases: [gateway-b]
+
+networks:
+  ot:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${OT_SUBNET}
+  it:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${IT_SUBNET}
+
+volumes:
+  ziti-fs:
+  ziti-identities:
+  historian-data:
