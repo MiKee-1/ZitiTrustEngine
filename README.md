@@ -4,8 +4,7 @@ Thesis lab: an external TrustEngine for OpenZiti in an OT/IT context
 (gateways that poll a Modbus server and write to a historian).
 
 Current state: just the network skeleton (Ziti controller/router,
-server-side tunneler, historian, two verification gateways). Detailed,
-step-by-step writeup in `../spiegazione.md`.
+server-side tunneler, historian, two verification gateways).
 
 ## Start
 
