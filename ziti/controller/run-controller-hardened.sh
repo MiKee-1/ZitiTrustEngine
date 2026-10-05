@@ -16,10 +16,23 @@
 # controller's management surface (identities, policies, services), even though
 # authentication then blocks them. Here we separate them at the network level, not
 # just by credentials.
+#
+# The same rewrite also adds an "events" section, so the controller writes a
+# structured, file-backed log of circuit/session/apiSession events (one of the
+# three log sources for the TrustEngine). Written to /events/events.json, a
+# bind mount (see docker-compose.yml) so it's readable from the host directly.
+#
+# Also fixes a real bug found by actually restarting this container (not just
+# recreating it after a full `down -v`): the original script's "already
+# initialized" check looks for a file, access-control.init, that nothing -
+# not this script, not ziti-cli-functions.sh - ever creates. So every restart
+# took the "not initialized" branch again, including a call to
+# `createControllerConfig`, which prompts for overwrite permission when the
+# config file already exists - a prompt that can't be answered with no TTY,
+# so the container just exited. Using the real config file's own existence as
+# the "already initialized" signal instead fixes this for good.
 
 set -e
-
-ziti_controller_cfg="${ZITI_HOME}/ziti-edge-controller.yaml"
 
 ASCI_RESTORE='\033[0m'
 ASCI_RED='\033[00;31m'
@@ -83,6 +96,28 @@ web:
         options: { }
       - binding: fabric
         options: { }
+
+events:
+  jsonLogger:
+    subscriptions:
+      - type: fabric.circuits
+        include:
+          - created
+          - deleted
+      - type: edge.sessions
+        include:
+          - created
+          - deleted
+      - type: edge.apiSessions
+        include:
+          - created
+          - deleted
+      - type: connect
+      - type: sdk
+    handler:
+      type: file
+      format: json
+      path: /events/events.json
 EOF
   mv "${cfg}.tmp" "${cfg}"
 }
@@ -92,40 +127,30 @@ if [[ "${ZITI_CTRL_NAME-}" == "" ]]; then export ZITI_CTRL_NAME="${ZITI_NETWORK}
 
 . "${ZITI_SCRIPTS}/ziti-cli-functions.sh"
 
-if [ ! -f "${ZITI_HOME}/access-control.init" ]; then
-  echo "system has not been initialized. initializing..."
+controller_cfg="${ZITI_HOME}/${ZITI_CTRL_NAME}.yaml"
+
+if [ ! -f "${controller_cfg}" ]; then
+  echo "${controller_cfg} not found: first-time initialization."
   setupEnvironment
   persistEnvironmentValues
   . "${ZITI_HOME}/ziti.env"
 
-  if [ ! -f "${ZITI_HOME}/access-control.init" ]; then
-    setupEnvironment
-    persistEnvironmentValues
-  else
-    echo "system has been initialized already. just starting the process"
-  fi
   createPki
-  if [ ! -f "${ziti_controller_cfg}" ]; then
-    echo " "
-    echo "${ziti_controller_cfg} doesn't exist. Generating config file"
-    echo " "
-    createControllerConfig
-  else
-    echo " "
-    echo "${ziti_controller_cfg} exists. Not overwriting"
-    echo " "
-  fi
-
+  createControllerConfig
   hardenControllerConfig
 
-  "${ZITI_BIN_DIR}/ziti" controller edge init "${ZITI_HOME}/${ZITI_CTRL_NAME}.yaml" -u "${ZITI_USER}" -p "${ZITI_PWD}"
+  "${ZITI_BIN_DIR}/ziti" controller edge init "${controller_cfg}" -u "${ZITI_USER}" -p "${ZITI_PWD}"
   if [[ "$?" != 0 ]]; then
     echo -e "$(RED "  --- There was an error while initializing the controller ---")"
     exit 1
   fi
 else
-  echo "system has been initialized. starting the process."
+  echo "${controller_cfg} already exists: already initialized, just starting the process."
   . "${ZITI_HOME}/ziti.env"
+  # re-applied on every start (it's idempotent: it rewrites everything from
+  # "web:" down), so changes to the web/events sections take effect on a
+  # plain restart, without a `down -v` that would wipe the PKI.
+  hardenControllerConfig
 fi
 
 echo "controller initialized. unsetting ZITI_USER/ZITI_PWD from env"
@@ -134,4 +159,4 @@ unset ZITI_PWD
 
 mkdir -p "$ZITI_HOME/db"
 
-"${ZITI_BIN_DIR}/ziti" controller run ${ZITI_VERBOSE:+--verbose} "${ZITI_HOME}/${ZITI_CTRL_NAME}.yaml"
+"${ZITI_BIN_DIR}/ziti" controller run ${ZITI_VERBOSE:+--verbose} "${controller_cfg}"
