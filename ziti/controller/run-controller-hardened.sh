@@ -112,7 +112,9 @@ events:
         include:
           - created
           - deleted
-      - type: connect
+      # "connect" is deliberately left out: it logs every client API call
+      # (~3 events every 10s per identity, ~26k/day each) and the TrustEngine's
+      # scenarios only need the IP at login (apiSessions) plus presence (sdk).
       - type: sdk
     handler:
       type: file

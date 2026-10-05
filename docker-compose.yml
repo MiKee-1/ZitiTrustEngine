@@ -122,7 +122,12 @@ services:
     environment:
       - ZITI_IDENTITY_BASENAME=ziti-host
     volumes:
-      - ziti-identities:/ziti-edge-tunnel
+      # only its own identity (subdirectory written by ziti-setup)
+      - type: volume
+        source: ziti-identities
+        target: /ziti-edge-tunnel
+        volume:
+          subpath: ziti-host
     networks:
       it:
         ipv4_address: ${ZITI_HOST_IT_IP}
@@ -149,12 +154,8 @@ services:
   # /dev/net/tun are what the tunneler needs to create its tun interface and
   # routes.
   #
-  # NOTE: the whole ziti-identities volume is mounted, so every gateway can
-  # read every identity file (the other gateway's and ziti-host's too). The
-  # tunneler is pinned to its own file with -i, but nothing stops a process
-  # in gateway-a from reading /identities/gateway-b.json. Known lab shortcut
-  # (see README): it is also what makes the cloned-certificate scenario
-  # trivial to reproduce.
+  # Each gateway mounts only its own subdirectory of the identity volume, so
+  # it can't read the other gateway's or ziti-host's certificate and key.
   # ---------------------------------------------------------------------
   gateway-a:
     build: ./gateway
@@ -176,7 +177,12 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:
-      - ziti-identities:/identities:ro
+      - type: volume
+        source: ziti-identities
+        target: /identities
+        read_only: true
+        volume:
+          subpath: gateway-a
       - ./logs/osquery:/logs
     networks:
       ot:
@@ -203,7 +209,12 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:
-      - ziti-identities:/identities:ro
+      - type: volume
+        source: ziti-identities
+        target: /identities
+        read_only: true
+        volume:
+          subpath: gateway-b
       - ./logs/osquery:/logs
     networks:
       ot:
@@ -233,7 +244,6 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
-    working_dir: /opt/zeek/logs
     # the image's default command is just "bash": it does NOT auto-start capture
     # from ZEEK_INTERFACE, so the interface/policy has to be given explicitly here.
     # "local" loads Zeek's standard base policy, which includes the Modbus analyzer.
@@ -241,7 +251,14 @@ services:
     # are computed by NIC offload after capture, so Zeek sees them as "wrong" even
     # though real delivery is fine. Without -C it drops the packets before they
     # ever reach the Modbus analyzer (confirmed via reporter.log/weird.log).
-    command: ["zeek", "-C", "-i", "eth0", "local"]
+    #
+    # Each start writes into its own UTC-timestamped subdirectory of
+    # logs/zeek/: run in place, Zeek truncates every log on restart, which
+    # would lose data whenever the plc (whose namespace it shares) is
+    # recreated.
+    entrypoint: ["sh", "-c"]
+    command:
+      - d=/opt/zeek/logs/$$(date -u +%Y%m%dT%H%M%SZ) && mkdir -p "$$d" && cd "$$d" && exec zeek -C -i eth0 local
     volumes:
       - ./logs/zeek:/opt/zeek/logs
     depends_on:
