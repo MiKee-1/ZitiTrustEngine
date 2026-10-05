@@ -33,23 +33,32 @@ queries (written to `logs/osquery/`).
 
 ## IP to identity correlation
 
-Zeek only sees IPs; the controller only sees identities. To annotate every
-Modbus record with the Ziti identity seen at that IP (from controller
-`connect`, apiSession and circuit events):
+Zeek only sees IPs; the controller only sees identities. A login
+(apiSession event) assigns its IP to that identity until the identity goes
+offline (sdk-offline). To annotate every Modbus record with the identity
+holding that IP at that time:
 
 ```sh
-python3 analysis/ip_identity.py --names identities.json   # from `ziti edge list identities -j`
+analysis/export_identities.sh    # optional: identity names, kept in logs/identities/
+python3 analysis/ip_identity.py
 ```
 
-## Known limitation: shared identity volume
+Events only carry identity ids. Each export is kept in its own file because
+a `down -v` recreates every identity with a new id: run the export after
+every fresh start to name events from all of them.
 
-The `ziti-identities` volume holds every enrolled identity (certificate and
-private key) and is mounted whole into both gateways. Each tunneler is
-pinned to its own file with `-i`, but any process in `gateway-a` can read
-`/identities/gateway-b.json` and `/identities/ziti-host.json`. In a real
-deployment each identity would exist only on the host that uses it. Kept
-for now as a lab shortcut; it is also the reason the cloned-certificate
-scenario needs no extra setup.
+## Identities
+
+`ziti-setup` writes each enrolled identity into its own subdirectory of
+the `ziti-identities` volume, and each container mounts only its own: no
+gateway can read another identity's certificate and key.
+
+## Logs
+
+All runtime output lands in `logs/` (gitignored): controller events in
+`logs/controller/events.json`, osquery results in `logs/osquery/`, and Zeek
+logs in `logs/zeek/<UTC start time>/`, one directory per Zeek start so a
+restart never truncates earlier logs.
 
 ## Full reset
 
