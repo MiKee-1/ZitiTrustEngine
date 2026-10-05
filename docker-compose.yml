@@ -45,6 +45,7 @@ services:
         aliases: [ziti-controller]
     volumes:
       - ziti-fs:/persistent
+      - ./logs/controller:/events
 
   # ---------------------------------------------------------------------
   # Public edge router: the only router in this lab. Must sit on both
@@ -142,8 +143,18 @@ services:
       - historian-data:/data
 
   # ---------------------------------------------------------------------
-  # Gateways: "ot" network only. Verify that the historian is unreachable
-  # directly and that dialing the Ziti "historian" service works.
+  # Gateways: "ot" network only. Each one runs ziti-edge-tunnel in-process
+  # (see gateway/entrypoint.sh): the tunneler intercepts historian.ziti and
+  # carries it over the overlay, so the scripts use plain HTTP. NET_ADMIN and
+  # /dev/net/tun are what the tunneler needs to create its tun interface and
+  # routes.
+  #
+  # NOTE: the whole ziti-identities volume is mounted, so every gateway can
+  # read every identity file (the other gateway's and ziti-host's too). The
+  # tunneler is pinned to its own file with -i, but nothing stops a process
+  # in gateway-a from reading /identities/gateway-b.json. Known lab shortcut
+  # (see README): it is also what makes the cloned-certificate scenario
+  # trivial to reproduce.
   # ---------------------------------------------------------------------
   gateway-a:
     build: ./gateway
@@ -152,12 +163,21 @@ services:
         condition: service_completed_successfully
       historian:
         condition: service_started
+      plc:
+        condition: service_started
     environment:
       - GATEWAY_ID=gateway-a
       - HISTORIAN_IP=${HISTORIAN_IT_IP}
       - HISTORIAN_PORT=5000
+      - PLC_IP=${PLC_OT_IP}
+      - PLC_PORT=${PLC_PORT}
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
       - ziti-identities:/identities:ro
+      - ./logs/osquery:/logs
     networks:
       ot:
         ipv4_address: ${GATEWAY_A_OT_IP}
@@ -170,16 +190,62 @@ services:
         condition: service_completed_successfully
       historian:
         condition: service_started
+      plc:
+        condition: service_started
     environment:
       - GATEWAY_ID=gateway-b
       - HISTORIAN_IP=${HISTORIAN_IT_IP}
       - HISTORIAN_PORT=5000
+      - PLC_IP=${PLC_OT_IP}
+      - PLC_PORT=${PLC_PORT}
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
       - ziti-identities:/identities:ro
+      - ./logs/osquery:/logs
     networks:
       ot:
         ipv4_address: ${GATEWAY_B_OT_IP}
         aliases: [gateway-b]
+
+  # ---------------------------------------------------------------------
+  # plc: synthetic Modbus/TCP server, "ot" network only. Stands in for the
+  # physical device the gateways poll.
+  # ---------------------------------------------------------------------
+  plc:
+    build: ./plc
+    networks:
+      ot:
+        ipv4_address: ${PLC_OT_IP}
+        aliases: [plc]
+
+  # ---------------------------------------------------------------------
+  # zeek: passive traffic analyzer, sharing the plc's network namespace
+  # (not a separate network entry) so it sees the raw Modbus traffic
+  # between the gateways and the plc. That traffic stays on "ot" and never
+  # enters the Ziti overlay, so this is the only place it can be observed.
+  # ---------------------------------------------------------------------
+  zeek:
+    image: zeek/zeek:latest
+    network_mode: "service:plc"
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    working_dir: /opt/zeek/logs
+    # the image's default command is just "bash": it does NOT auto-start capture
+    # from ZEEK_INTERFACE, so the interface/policy has to be given explicitly here.
+    # "local" loads Zeek's standard base policy, which includes the Modbus analyzer.
+    # "-C" = don't discard packets over bad checksums: on a Docker veth, checksums
+    # are computed by NIC offload after capture, so Zeek sees them as "wrong" even
+    # though real delivery is fine. Without -C it drops the packets before they
+    # ever reach the Modbus analyzer (confirmed via reporter.log/weird.log).
+    command: ["zeek", "-C", "-i", "eth0", "local"]
+    volumes:
+      - ./logs/zeek:/opt/zeek/logs
+    depends_on:
+      - plc
 
 networks:
   ot:
