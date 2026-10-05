@@ -1,28 +1,45 @@
-from pymodbus.datastore import ModbusDeviceContext, ModbusSequentialDataBlock, ModbusServerContext
-from pymodbus.server import StartTcpServer
+import asyncio
+import time
+
+from pymodbus.server import StartAsyncTcpServer
+from pymodbus.simulator import DataType, SimData, SimDevice
 
 REGISTER_COUNT = 10
+TICK_SECONDS = 2
+STARTED = time.monotonic()
 
-# pymodbus 3.15 renamed ModbusSlaveContext -> ModbusDeviceContext and dropped the
-# synchronous context[0].setValues() convenience method (the old datastore API is
-# deprecated in favor of SimData/SimDevice). No live-incrementing register for now:
-# static values are enough to produce a real Modbus read/write for Zeek to observe.
+# Uses the SimData/SimDevice API: in pymodbus 3.15 the older datastore
+# classes (ModbusDeviceContext/ModbusServerContext) are deprecated, and
+# their get/set calls just return DEVICE_BUSY, so a live value can't be
+# pushed into them from outside the server.
 
 
-def main():
-    # ModbusSequentialDataBlock's starting address is 1-based internally in this
-    # pymodbus version (it builds SimData(address - 1, ...)); address=0 raises.
-    device = ModbusDeviceContext(
-        di=ModbusSequentialDataBlock(1, [0] * REGISTER_COUNT),
-        co=ModbusSequentialDataBlock(1, [0] * REGISTER_COUNT),
-        hr=ModbusSequentialDataBlock(1, [42] * REGISTER_COUNT),
-        ir=ModbusSequentialDataBlock(1, [0] * REGISTER_COUNT),
+async def on_request(func_code, _device_id, _address, _count, registers, _values):
+    # Called before every request is served. Holding register 0 is a counter
+    # that goes up by one every TICK_SECONDS since start, so reads look like
+    # live telemetry. Computed on demand instead of by a background loop.
+    registers[0] = int((time.monotonic() - STARTED) // TICK_SECONDS) & 0xFFFF
+    return None
+
+
+def bits():
+    return [SimData(0, count=REGISTER_COUNT, values=False, datatype=DataType.BITS)]
+
+
+def registers(value):
+    return [SimData(0, count=REGISTER_COUNT, values=value, datatype=DataType.REGISTERS)]
+
+
+async def main():
+    # (coils, discrete inputs, holding registers, input registers)
+    device = SimDevice(
+        id=0,
+        simdata=(bits(), bits(), registers(42), registers(0)),
+        action=on_request,
     )
-    context = ModbusServerContext(devices=device, single=True)
-
     print("Modbus/TCP server listening on 0.0.0.0:502", flush=True)
-    StartTcpServer(context=context, address=("0.0.0.0", 502))
+    await StartAsyncTcpServer(context=device, address=("0.0.0.0", 502))
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
