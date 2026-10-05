@@ -2,8 +2,8 @@
 # One-shot container: configures Ziti identities, service and policies for the lab.
 # Runs on the openziti/quickstart image (already has the "ziti" CLI and "jq"), attached
 # only to the "it" network, and talks to the controller's Edge MANAGEMENT API (port 1281,
-# reachable only from there). At the end it leaves the enrolled identities' .json files
-# in /identities, shared via volume with ziti-host and the gateways.
+# reachable only from there). At the end it leaves each enrolled identity's .json file
+# in /identities/<name>/, on a volume whose subdirectories are mounted one per container.
 set -euo pipefail
 
 export PATH="/var/openziti/ziti-bin:${PATH}"
@@ -43,22 +43,30 @@ ziti edge create service-edge-router-policy allSvcAllRouters --edge-router-roles
 
 mkdir -p /identities
 
+# Each identity goes in its own subdirectory (/identities/<name>/<name>.json):
+# docker-compose.yml mounts only that subdirectory into the container that
+# uses it, so no container can read another one's certificate and key.
 create_identity() {
   local name="$1"
-  if [ -f "/identities/${name}.json" ]; then
+  local dir="/identities/${name}"
+  if [ -f "${dir}/${name}.json" ]; then
     echo "[setup] identity ${name} already enrolled, skipping"
     return
   fi
+  mkdir -p "${dir}"
   echo "[setup] creating identity ${name}"
-  ziti edge create identity "${name}" -o "/identities/${name}.jwt"
+  ziti edge create identity "${name}" -o "${dir}/${name}.jwt"
   echo "[setup] enrolling ${name}"
-  ziti edge enroll "/identities/${name}.jwt"
-  rm -f "/identities/${name}.jwt"
+  ziti edge enroll "${dir}/${name}.jwt"
+  rm -f "${dir}/${name}.jwt"
 }
 
 create_identity gateway-a
 create_identity gateway-b
 create_identity ziti-host
+# ziti-host runs as nobody:ziti (65534:2171) and writes a backup and config
+# updates next to its identity file, so its directory must belong to it.
+chown -R 65534:2171 /identities/ziti-host
 
 echo "[setup] tagging identities with the role attributes used by the policies..."
 ziti edge update identity gateway-a --role-attributes gateway
