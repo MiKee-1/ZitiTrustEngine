@@ -6,7 +6,8 @@
 #   - edge-client-api     -> exposes ONLY edge-client/edge-oidc, on 0.0.0.0 (must stay
 #                             reachable from both the gateways on the ot network and
 #                             whoever binds a service)
-#   - edge-management-api -> exposes edge-management/fabric, bound ONLY on
+#   - edge-management-api -> exposes edge-management/fabric (plus edge-oidc, which
+#                             the CLI's admin login needs), bound ONLY on
 #                             ZITI_CTRL_MGMT_BIND (normally the controller's IP on the
 #                             "it" network): from the ot network this port is not even
 #                             reachable at the TCP level.
@@ -96,6 +97,11 @@ web:
         options: { }
       - binding: fabric
         options: { }
+      # the v2 CLI's "ziti edge login" authenticates via OIDC on the same
+      # host:port it is pointed at (/oidc/authorize): without this binding,
+      # every admin login on this port fails with a 404
+      - binding: edge-oidc
+        options: { }
 
 events:
   jsonLogger:
@@ -161,4 +167,9 @@ unset ZITI_PWD
 
 mkdir -p "$ZITI_HOME/db"
 
-"${ZITI_BIN_DIR}/ziti" controller run ${ZITI_VERBOSE:+--verbose} "${controller_cfg}"
+# Process log in JSON (absolute timestamps, one object per line), also
+# appended to /events/controller.log next to events.json. Failed logins only
+# show up here, never in the event log, and `docker compose logs` is lost
+# when the container is recreated.
+"${ZITI_BIN_DIR}/ziti" controller run ${ZITI_VERBOSE:+--verbose} --log-formatter json "${controller_cfg}" 2>&1 \
+  | tee -a /events/controller.log

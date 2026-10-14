@@ -1,0 +1,8 @@
+--config_path=/app/osquery.conf
+--logger_plugin=filesystem
+--database_path=/var/osquery/osquery.db
+--pidfile=/var/osquery/osqueryd.pidfile
+--host_identifier=specified
+--schedule_splay_percent=0
+--disable_events=true
+--logger_mode=0644
