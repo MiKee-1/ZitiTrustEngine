@@ -1,0 +1,4 @@
+# Every text file uses LF, also in a Windows checkout: the shell scripts,
+# .env and the osquery files are read inside Linux containers, where a CRLF
+# breaks them ($'\r': command not found).
+* text=auto eol=lf
