@@ -13,7 +13,7 @@ HISTORIAN_IP = os.environ.get("HISTORIAN_IP", "10.19.2.30")
 HISTORIAN_PORT = int(os.environ.get("HISTORIAN_PORT", "5000"))
 PLC_IP = os.environ.get("PLC_IP", "10.19.1.30")
 PLC_PORT = int(os.environ.get("PLC_PORT", "502"))
-OSQUERY_LOG_DIR = os.environ.get("OSQUERY_LOG_DIR", "/logs")
+OSQUERY_LOG_DIR = os.environ.get("OSQUERY_LOG_DIR", "/logs/osquery")
 
 
 def log(msg):
