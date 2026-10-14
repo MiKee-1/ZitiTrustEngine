@@ -115,7 +115,7 @@ services:
   # network: it doesn't have, and doesn't need, any interface on "ot".
   # ---------------------------------------------------------------------
   ziti-host:
-    image: openziti/ziti-host:latest
+    image: openziti/ziti-host:${ZITI_TUNNEL_VERSION}
     depends_on:
       ziti-setup:
         condition: service_completed_successfully
@@ -152,13 +152,18 @@ services:
   # (see gateway/entrypoint.sh): the tunneler intercepts historian.ziti and
   # carries it over the overlay, so the scripts use plain HTTP. NET_ADMIN and
   # /dev/net/tun are what the tunneler needs to create its tun interface and
-  # routes.
+  # routes. SYS_PTRACE lets the tunneler see which executables are running,
+  # for the process posture check.
   #
   # Each gateway mounts only its own subdirectory of the identity volume, so
-  # it can't read the other gateway's or ziti-host's certificate and key.
+  # it can't read the other gateway's or ziti-host's certificate and key. It is
+  # writable: the gateway enrolls its identity there on first start.
   # ---------------------------------------------------------------------
   gateway-a:
-    build: ./gateway
+    build:
+      context: ./gateway
+      args:
+        ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
     depends_on:
       ziti-setup:
         condition: service_completed_successfully
@@ -174,23 +179,30 @@ services:
       - PLC_PORT=${PLC_PORT}
     cap_add:
       - NET_ADMIN
+      # the tunneler switches to the "ziti" group at startup, and the kernel
+      # then hides /proc/<pid>/exe of the gateway's other processes from it:
+      # without this, the process posture check always reports "not running"
+      - SYS_PTRACE
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:
       - type: volume
         source: ziti-identities
         target: /identities
-        read_only: true
         volume:
           subpath: gateway-a
-      - ./logs/osquery:/logs
+      - ./logs/osquery:/logs/osquery
+      - ./logs/poller:/logs/poller
     networks:
       ot:
         ipv4_address: ${GATEWAY_A_OT_IP}
         aliases: [gateway-a]
 
   gateway-b:
-    build: ./gateway
+    build:
+      context: ./gateway
+      args:
+        ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
     depends_on:
       ziti-setup:
         condition: service_completed_successfully
@@ -206,16 +218,20 @@ services:
       - PLC_PORT=${PLC_PORT}
     cap_add:
       - NET_ADMIN
+      # the tunneler switches to the "ziti" group at startup, and the kernel
+      # then hides /proc/<pid>/exe of the gateway's other processes from it:
+      # without this, the process posture check always reports "not running"
+      - SYS_PTRACE
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:
       - type: volume
         source: ziti-identities
         target: /identities
-        read_only: true
         volume:
           subpath: gateway-b
-      - ./logs/osquery:/logs
+      - ./logs/osquery:/logs/osquery
+      - ./logs/poller:/logs/poller
     networks:
       ot:
         ipv4_address: ${GATEWAY_B_OT_IP}

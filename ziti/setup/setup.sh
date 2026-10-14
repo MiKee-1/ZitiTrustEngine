@@ -2,8 +2,10 @@
 # One-shot container: configures Ziti identities, service and policies for the lab.
 # Runs on the openziti/quickstart image (already has the "ziti" CLI and "jq"), attached
 # only to the "it" network, and talks to the controller's Edge MANAGEMENT API (port 1281,
-# reachable only from there). At the end it leaves each enrolled identity's .json file
-# in /identities/<name>/, on a volume whose subdirectories are mounted one per container.
+# reachable only from there). It creates each identity and leaves its one-time
+# enrollment token in /identities/<name>/<name>.jwt, on a volume whose subdirectories
+# are mounted one per container: the container that uses the identity enrolls it on
+# first start, so the private key is generated where it is used and never leaves it.
 set -euo pipefail
 
 export PATH="/var/openziti/ziti-bin:${PATH}"
@@ -43,29 +45,32 @@ ziti edge create service-edge-router-policy allSvcAllRouters --edge-router-roles
 
 mkdir -p /identities
 
-# Each identity goes in its own subdirectory (/identities/<name>/<name>.json):
-# docker-compose.yml mounts only that subdirectory into the container that
-# uses it, so no container can read another one's certificate and key.
+# Each identity goes in its own subdirectory (/identities/<name>/): docker-compose.yml
+# mounts only that subdirectory into the container that uses it, so no container can
+# read another one's certificate and key.
+#
+# Only the enrollment token is written here. Enrollment is done by ziti-edge-tunnel in
+# the container that owns the identity (gateway/entrypoint.sh for the gateways, the
+# openziti/ziti-host image's own entrypoint for ziti-host), which generates its own key.
+# Identities enrolled here with "ziti edge enroll" (RSA keys) failed the tunneler's TLS
+# handshake with the controller's OIDC endpoint; tunneler-enrolled ones (EC keys) work.
 create_identity() {
   local name="$1"
   local dir="/identities/${name}"
-  if [ -f "${dir}/${name}.json" ]; then
-    echo "[setup] identity ${name} already enrolled, skipping"
+  if [ -f "${dir}/${name}.json" ] || [ -f "${dir}/${name}.jwt" ]; then
+    echo "[setup] identity ${name} already created, skipping"
     return
   fi
   mkdir -p "${dir}"
-  echo "[setup] creating identity ${name}"
+  echo "[setup] creating identity ${name} (enrollment token only)"
   ziti edge create identity "${name}" -o "${dir}/${name}.jwt"
-  echo "[setup] enrolling ${name}"
-  ziti edge enroll "${dir}/${name}.jwt"
-  rm -f "${dir}/${name}.jwt"
 }
 
 create_identity gateway-a
 create_identity gateway-b
 create_identity ziti-host
-# ziti-host runs as nobody:ziti (65534:2171) and writes a backup and config
-# updates next to its identity file, so its directory must belong to it.
+# ziti-host runs as nobody:ziti (65534:2171) and writes its enrolled identity, a
+# backup and config updates in its directory, so the directory must belong to it.
 chown -R 65534:2171 /identities/ziti-host
 
 echo "[setup] tagging identities with the role attributes used by the policies..."
@@ -85,9 +90,23 @@ echo "[setup] historian service..."
 ziti edge create service historian --configs historian-intercept.v1,historian-host.v1 \
   || echo "[setup]   service already exists"
 
+# Process posture check: a gateway may dial the historian only while its
+# polling loop is running. The tunneler reports which executables are
+# running, and the check matches the executable path, not the command line:
+# the poller runs under a dedicated copy of the Python interpreter
+# (gateway/Dockerfile), so any other Python script on the gateway does not
+# satisfy it. Path only, no binary hash.
+echo "[setup] process posture check for the gateways' polling loop..."
+ziti edge create posture-check process poller-running Linux /usr/local/bin/gateway-poller \
+  --role-attributes poller-running \
+  || echo "[setup]   posture check already exists"
+
 echo "[setup] service policies (dial for the gateways, bind for ziti-host)..."
 ziti edge create service-policy historian-dial Dial --service-roles '@historian' --identity-roles '#gateway' \
+  --posture-check-roles '#poller-running' \
   || echo "[setup]   dial policy already exists"
+# also applies the posture check to a dial policy created by an earlier run
+ziti edge update service-policy historian-dial --posture-check-roles '#poller-running'
 ziti edge create service-policy historian-bind Bind --service-roles '@historian' --identity-roles '#historian-host' \
   || echo "[setup]   bind policy already exists"
 
