@@ -18,7 +18,8 @@ the process posture check on the historian's dial policy requires that
 executable to be running, so the gateway can reach the historian only
 while this loop is up.
 
-One line per cycle is appended to logs/poller/poller-<gateway>.log. A pid
+One line per cycle is appended to logs/poller/<gateway>/poller-<gateway>.log
+(only that directory is mounted into the gateway, at /logs/poller). A pid
 file prevents a second instance in the same gateway (it would double the
 polling rate seen by Zeek and the controller).
 """
