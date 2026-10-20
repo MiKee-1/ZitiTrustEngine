@@ -26,6 +26,12 @@ Each gateway then runs only `ziti-edge-tunnel`. Nothing else starts on its
 own: the polling loop and osquery are started by hand, when a recording
 period begins.
 
+Before the controller starts, the one-shot `logs-init` service creates the
+`logs/` directories the containers write into, if missing, and makes them
+writable by everyone (777) on every `up`: a bind-mount source that Docker
+creates on its own belongs to root with mode 755, and the controller runs
+as uid 2171.
+
 ## Versions
 
 The OpenZiti versions are pinned in `.env`: `ZITI_VERSION` (controller,
@@ -47,12 +53,15 @@ docker compose exec -d gateway-a bash osqueryd.sh
 - `gateway/poller.py` reads holding register 0 from the `plc` every 10 s
   (reads only) and posts it to `http://historian.ziti:5000`, which the
   tunneler intercepts and carries over the overlay. One line per cycle in
-  `logs/poller/`.
+  `logs/poller/<gateway>/`.
 - `osqueryd` runs the scheduled queries in `gateway/osquery.conf`
   (processes and sockets on port 502) every 30 s; results in
   `logs/osquery/<gateway>/osqueryd.snapshots.log`.
 
 Both keep a pid file, so a second instance in the same gateway is refused.
+Each gateway mounts only its own `logs/osquery/<gateway>/` and
+`logs/poller/<gateway>/`, so a compromised gateway cannot rewrite the
+other one's logs.
 They stop when the container is recreated and have to be started again.
 
 ## Process posture check
@@ -111,7 +120,7 @@ All runtime output lands in `logs/` (gitignored):
 | `logs/controller/controller.log` | controller process log in JSON: the only place failed logins show up |
 | `logs/zeek/<UTC start time>/` | Zeek logs, one directory per Zeek start (`modbus.log` is the one that matters) |
 | `logs/osquery/<gateway>/` | `osqueryd` scheduled query results |
-| `logs/poller/` | one line per polling cycle, per gateway |
+| `logs/poller/<gateway>/` | one line per polling cycle |
 | `logs/posture/` | `posture_status.sh` exports |
 | `logs/identities/` | `export_identities.sh` exports |
 
