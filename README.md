@@ -76,7 +76,8 @@ could not otherwise see the other processes' executables.
 
 A denied dial does not appear in the controller's event log. To save each
 gateway's reported posture and the controller's list of denied dials
-(kept only in memory, lost on a controller restart):
+(kept only in memory, lost on a controller restart, and limited to the
+last 100 denials per identity):
 
 ```sh
 analysis/posture_status.sh       # writes logs/posture/<UTC time>.json
