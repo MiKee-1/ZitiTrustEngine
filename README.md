@@ -95,6 +95,38 @@ one Modbus read **and one write** and two osquery queries. The write is
 exactly what the TrustEngine will flag as anomalous: do not run it during
 a recording of normal behaviour.
 
+## Scenario runs
+
+Each scenario is produced on purpose in a short run with known start and
+end, so that the logs of every run can be matched against what actually
+happened. With the lab up:
+
+```sh
+scenarios/control.sh             # no attack: normal behaviour
+scenarios/poller_stopped.sh      # reference case: polling loop stopped
+```
+
+Every run has three timed phases, `normal-before`, `attack` and
+`normal-after` (300, 600 and 300 s by default; set `NORMAL_BEFORE`,
+`ATTACK`, `NORMAL_AFTER` to change them). The scripts never start or stop
+the stack; they start the polling loop and osquery on the gateways only if
+they are not running, and wait for a successful post first.
+
+The ground truth of each run is `logs/runs/<run id>.jsonl`: one JSON line
+per event (run start with its parameters and the code commit, phase
+boundaries, attack actions), timed by the lab's own clock. It is the label
+to check the TrustEngine against, not one of its sources. Commit before a
+run: uncommitted changes are recorded as `dirty`. Identity names are exported
+before the first phase and the posture data after the last one.
+
+`poller_stopped.sh` copies `scenarios/probe.py` into the gateway: it dials
+the historian every second during the attack phase, so the moment the
+posture check starts denying shows up in `logs/runs/<run id>.probe.log`
+and in the denied dials of the posture export.
+
+After each run, stop the lab and move `logs/` aside before the next one,
+so that every run has its own set of logs.
+
 ## IP to identity correlation
 
 Zeek only sees IPs; the controller only sees identities. A login
@@ -123,6 +155,7 @@ All runtime output lands in `logs/` (gitignored):
 | `logs/poller/<gateway>/` | one line per polling cycle |
 | `logs/posture/` | `posture_status.sh` exports |
 | `logs/identities/` | `export_identities.sh` exports |
+| `logs/runs/` | scenario runs: ground truth (`<run id>.jsonl`) and probe output |
 
 The historian's own data (readings and a log of every request) is in the
 `historian-data` volume.
