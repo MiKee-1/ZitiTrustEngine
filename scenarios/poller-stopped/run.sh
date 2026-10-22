@@ -12,8 +12,8 @@
 # dial. At the end of the phase the loop is started again (its first cycle
 # is denied, as on every start).
 #
-#   scenarios/poller_stopped.sh            # TARGET=gateway-b for the other one
-source "$(dirname "$0")/lib.sh"
+#   scenarios/poller-stopped/run.sh        # TARGET=gateway-b for the other one
+source "$(dirname "$0")/../common/lib.sh"
 
 TARGET="${TARGET:-gateway-a}"
 PROBE_INTERVAL="${PROBE_INTERVAL:-1}"
@@ -21,7 +21,7 @@ PROBE_LEAD="${PROBE_LEAD:-10}"
 
 attack_start() {
   local t
-  docker compose cp scenarios/probe.py "$TARGET":/tmp/probe.py
+  docker compose cp "$SCENARIO_DIR/probe.py" "$TARGET":/tmp/probe.py
   # outlives the phase on purpose (+60 s): attack_stop stops it
   docker compose exec -T "$TARGET" python /tmp/probe.py \
     "$((PROBE_LEAD + ATTACK + 60))" "$PROBE_INTERVAL" \

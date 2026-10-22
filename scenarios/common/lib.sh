@@ -1,5 +1,9 @@
 #!/bin/bash
-# Shared code for the scenario runs, sourced by the scripts next to it.
+# Shared code for the scenario runs, sourced by each scenario's run.sh.
+#
+# One directory per scenario under scenarios/, holding its run.sh and the
+# files it copies into the lab. SCENARIO_DIR is that directory, relative
+# to the repo root (the working directory once this file is sourced).
 #
 # A run has three timed phases: normal-before, attack, normal-after. The
 # scenario script defines attack_start and attack_stop and calls
@@ -27,7 +31,8 @@
 
 set -euo pipefail
 export MSYS_NO_PATHCONV=1   # Git Bash: pass /paths to docker untouched
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+SCENARIO_DIR="scenarios/$(basename "$(cd "$(dirname "$0")" && pwd)")"
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 NORMAL_BEFORE="${NORMAL_BEFORE:-300}"
 ATTACK="${ATTACK:-600}"
@@ -78,6 +83,19 @@ event_at() {
 # running <gateway> <pid file>: true if that process is alive in the gateway
 running() {
   docker compose exec -T "$1" sh -c "kill -0 \$(cat $2 2>/dev/null) 2>/dev/null"
+}
+
+# holding registers 0-9 of the plc, comma separated, read from inside the
+# plc container over 127.0.0.1: Zeek listens on eth0 only, so this read
+# does not show up in the log sources
+plc_registers() {
+  docker compose exec -T plc python -c '
+from pymodbus.client import ModbusTcpClient
+c = ModbusTcpClient("127.0.0.1", port=502)
+c.connect()
+r = c.read_holding_registers(0, count=10, device_id=0)
+c.close()
+print(",".join(map(str, r.registers)))' | tr -d '\r'
 }
 
 # waits until the last line of the gateway's poller log is a successful post

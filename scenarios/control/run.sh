@@ -3,8 +3,8 @@
 # Shows what normal behaviour looks like over the same span of time, and
 # what a TrustEngine would flag when nothing is wrong.
 #
-#   scenarios/control.sh
-source "$(dirname "$0")/lib.sh"
+#   scenarios/control/run.sh
+source "$(dirname "$0")/../common/lib.sh"
 
 attack_start() { event action what="none: control run"; }
 attack_stop() { :; }
