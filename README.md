@@ -103,9 +103,15 @@ end, so that the logs of every run can be matched against what actually
 happened. With the lab up:
 
 ```sh
-scenarios/control.sh             # no attack: normal behaviour
-scenarios/poller_stopped.sh      # reference case: polling loop stopped
+scenarios/control/run.sh                  # no attack: normal behaviour
+scenarios/poller-stopped/run.sh           # reference case: polling loop stopped
+scenarios/write-tampered-poller/run.sh    # scenario 2: Modbus writes from the tampered poller
+scenarios/write-separate-process/run.sh   # scenario 2: Modbus writes from a separate process
 ```
+
+One directory per scenario under `scenarios/`, holding its `run.sh` and
+the files it copies into the lab; `scenarios/common/lib.sh` is the shared
+code they source.
 
 Every run has three timed phases, `normal-before`, `attack` and
 `normal-after` (300, 600 and 300 s by default; set `NORMAL_BEFORE`,
@@ -120,10 +126,19 @@ to check the TrustEngine against, not one of its sources. Commit before a
 run: uncommitted changes are recorded as `dirty`. Identity names are exported
 before the first phase and the posture data after the last one.
 
-`poller_stopped.sh` copies `scenarios/probe.py` into the gateway: it dials
-the historian every second during the attack phase, so the moment the
-posture check starts denying shows up in `logs/runs/<run id>.probe.log`
-and in the denied dials of the posture export.
+`poller-stopped` copies `probe.py` into the gateway: it dials the
+historian every second during the attack phase, so the moment the posture
+check starts denying shows up in `logs/runs/<run id>.probe.log` and in the
+denied dials of the posture export.
+
+The scenario 2 runs write holding register 1 of the `plc` during the
+attack phase, in two variants: `write-tampered-poller`, where the gateway's
+own polling loop is edited to write on its existing Modbus connection (same
+executable and declared posture), and `write-separate-process`, where a
+separate tool opens its own connection. Each write is recorded in
+`logs/runs/<run id>.writes.log`, and the `plc`'s holding registers are read
+(from inside the `plc`, so Zeek does not see it) before and after the
+attack. The written values stay in the `plc` until it is restarted.
 
 After each run, stop the lab and move `logs/` aside before the next one,
 so that every run has its own set of logs.
