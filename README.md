@@ -22,9 +22,10 @@ one-time enrollment token; the container that uses the identity enrolls it
 (the gateways in `gateway/entrypoint.sh`, `ziti-host` in its image's own
 entrypoint), so each private key is generated where it is used.
 
-Each gateway then runs only `ziti-edge-tunnel`. Nothing else starts on its
-own: the polling loop and osquery are started by hand, when a recording
-period begins.
+Each gateway then starts `ziti-edge-tunnel`, `osqueryd` and the polling
+loop on its own (`gateway/entrypoint.sh`), like a gateway whose services
+start at boot. Until the tunneler is ready the polling loop's first cycles
+fail; it carries on by itself.
 
 Before the controller starts, the one-shot `logs-init` service creates the
 `logs/` directories the containers write into, if missing, and makes them
@@ -44,10 +45,16 @@ by the previous version.
 
 ## Polling loop and osquery
 
+Both start with the gateway. The gateways run Docker's init as PID 1
+(`init: true`), which adopts them and reaps them when they end, so a
+stopped polling loop does not linger as a zombie in osquery's process
+list. To start one again by hand after stopping it, from a shell that
+exits right away, so that PID 1 adopts it as when the entrypoint starts it
+(osquery reports the parent process):
+
 ```sh
-docker compose exec -d gateway-a gateway-poller poller.py
-docker compose exec -d gateway-a bash osqueryd.sh
-# same for gateway-b
+docker compose exec -T gateway-a sh -c 'gateway-poller poller.py < /dev/null > /dev/null 2>&1 &'
+docker compose exec -T gateway-a sh -c 'bash osqueryd.sh < /dev/null > /dev/null 2>&1 &'
 ```
 
 - `gateway/poller.py` reads holding register 0 from the `plc` every 10 s
@@ -59,10 +66,12 @@ docker compose exec -d gateway-a bash osqueryd.sh
   `logs/osquery/<gateway>/osqueryd.snapshots.log`.
 
 Both keep a pid file, so a second instance in the same gateway is refused.
+Stopping the stack kills the gateways and leaves those files behind, so the
+entrypoint removes them on start: a new process could otherwise get the
+same pid as the old one and take itself for a second instance.
 Each gateway mounts only its own `logs/osquery/<gateway>/` and
 `logs/poller/<gateway>/`, so a compromised gateway cannot rewrite the
 other one's logs.
-They stop when the container is recreated and have to be started again.
 
 ## Process posture check
 
@@ -116,8 +125,10 @@ code they source.
 Every run has three timed phases, `normal-before`, `attack` and
 `normal-after` (300, 600 and 300 s by default; set `NORMAL_BEFORE`,
 `ATTACK`, `NORMAL_AFTER` to change them). The scripts never start or stop
-the stack; they start the polling loop and osquery on the gateways only if
-they are not running, and wait for a successful post first.
+the stack; they check that the polling loop and osquery are running on
+both gateways (started by the entrypoint) and wait for a successful post
+first. Scenarios that restart the polling loop start it the same way as by
+hand above, so that the restarted one has the same parent process.
 
 The ground truth of each run is `logs/runs/<run id>.jsonl`: one JSON line
 per event (run start with its parameters and the code commit, phase
