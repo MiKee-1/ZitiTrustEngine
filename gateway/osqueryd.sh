@@ -1,8 +1,10 @@
 #!/bin/bash
 # Starts the osquery daemon with the scheduled queries in osquery.conf.
-# Started by hand, detached, like the polling loop:
+# Started by entrypoint.sh when the gateway starts. By hand, after stopping
+# it, from a shell that exits right away (so that PID 1 adopts it, as when
+# the entrypoint starts it):
 #
-#   docker compose exec -d gateway-a bash osqueryd.sh
+#   docker compose exec -T gateway-a sh -c 'bash osqueryd.sh < /dev/null > /dev/null 2>&1 &'
 #
 # Results go to logs/osquery/<gateway>/osqueryd.snapshots.log, one JSON line
 # per query run with its timestamp; osqueryd's own status logs sit next to

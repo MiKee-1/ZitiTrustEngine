@@ -9,9 +9,11 @@ The historian is reached at historian.ziti, intercepted by ziti-edge-tunnel
 (started by entrypoint.sh): plain HTTP here, the dial happens in the
 tunneler.
 
-Started by hand, detached, when a recording period begins:
+Started by entrypoint.sh when the gateway starts. By hand, after stopping
+it, from a shell that exits right away (so that PID 1 adopts it, as when
+the entrypoint starts it):
 
-    docker compose exec -d gateway-a gateway-poller poller.py
+    docker compose exec -T gateway-a sh -c 'gateway-poller poller.py < /dev/null > /dev/null 2>&1 &'
 
 gateway-poller is a copy of the Python interpreter (see the Dockerfile):
 the process posture check on the historian's dial policy requires that

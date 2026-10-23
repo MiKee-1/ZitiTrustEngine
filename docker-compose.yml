@@ -185,12 +185,20 @@ services:
   #
   # Likewise for its logs: only its own subdirectories of logs/osquery and
   # logs/poller, so a compromised gateway can't rewrite the other one's logs.
+  #
+  # init: Docker's init runs as PID 1 and reaps the processes that end in the
+  # gateway. The entrypoint and the scenario scripts start the tunneler,
+  # osqueryd and the polling loop so that PID 1 adopts them; without a
+  # reaping PID 1 every stopped polling loop would stay behind as a zombie,
+  # an extra process in osquery's process list that nothing in the
+  # scenario put there.
   # ---------------------------------------------------------------------
   gateway-a:
     build:
       context: ./gateway
       args:
         ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
+    init: true
     depends_on:
       ziti-setup:
         condition: service_completed_successfully
@@ -230,6 +238,7 @@ services:
       context: ./gateway
       args:
         ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
+    init: true
     depends_on:
       ziti-setup:
         condition: service_completed_successfully
