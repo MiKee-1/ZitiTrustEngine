@@ -8,9 +8,10 @@
 # A run has three timed phases: normal-before, attack, normal-after. The
 # scenario script defines attack_start and attack_stop and calls
 # run_scenario, which:
-#   - checks that the lab is up (it never starts or stops the stack), starts
-#     the polling loop and osqueryd on both gateways if they are not
-#     running, and waits for each gateway's first successful post;
+#   - checks that the lab is up (it never starts or stops the stack) and
+#     that the polling loop and osqueryd, started by each gateway's
+#     entrypoint, are running, and waits for each gateway's last poll to be
+#     a successful post;
 #   - exports the identity names before the first phase and the posture
 #     data after the last one (analysis/), outside the phases: both log in
 #     as admin on the controller;
@@ -46,6 +47,16 @@ RUNS_DIR=logs/runs
 IN_ATTACK=0
 
 DATE_MS="date -u +%Y-%m-%dT%H:%M:%S.%3NZ"
+
+# Shell commands to run in a gateway (with lab_do, to take the time in the
+# same exec). STOP_POLLER stops the polling loop and waits for its pid file
+# to go. START_POLLER starts it in the background of a shell that exits
+# right away, so that PID 1 adopts it, as when the entrypoint starts it:
+# osquery reports the same parent either way. Its output goes to its own
+# log file only.
+STOP_POLLER="kill \$(cat $POLLER_PID) 2>/dev/null; \
+for i in \$(seq 50); do [ -e $POLLER_PID ] || break; sleep 0.1; done"
+START_POLLER="gateway-poller poller.py < /dev/null > /dev/null 2>&1 &"
 
 # UTC time from the lab's clock, in milliseconds
 lab_now() {
@@ -115,15 +126,11 @@ preflight() {
   for s in $SERVICES; do
     grep -qx "$s" <<<"$up" || { echo "$s is not running: start the lab first" >&2; exit 1; }
   done
+  # started by the gateway's entrypoint: if one is missing something in the
+  # gateway is wrong, and the run would not show the normal behaviour
   for g in $GATEWAYS; do
-    if ! running "$g" "$OSQUERY_PID"; then
-      echo "$g: osqueryd not running, starting it (in the background)"
-      docker compose exec -d "$g" bash osqueryd.sh
-    fi
-    if ! running "$g" "$POLLER_PID"; then
-      echo "$g: polling loop not running, starting it (in the background)"
-      docker compose exec -d "$g" gateway-poller poller.py
-    fi
+    running "$g" "$OSQUERY_PID" || { echo "$g: osqueryd is not running, see logs/osquery/$g/" >&2; exit 1; }
+    running "$g" "$POLLER_PID" || { echo "$g: polling loop is not running, see its log in logs/poller/$g/" >&2; exit 1; }
   done
   for g in $GATEWAYS; do wait_post_ok "$g"; done
 }

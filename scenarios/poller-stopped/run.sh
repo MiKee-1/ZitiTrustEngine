@@ -39,11 +39,7 @@ attack_stop() {
     'kill $(cat /tmp/probe.pid) 2>/dev/null; rm -f /tmp/probe.py /tmp/probe.pid' || true
   wait "${PROBE_JOB:-}" 2>/dev/null || true
   event action what="probe stopped" gateway="$TARGET"
-  # started as everywhere else (exec -d), not from a shell inside lab_do:
-  # osquery would see a different parent process. Its exact start time is
-  # in its own log.
-  t=$(lab_now)
-  docker compose exec -d "$TARGET" gateway-poller poller.py
+  t=$(lab_do "$TARGET" "$START_POLLER")
   event_at "$t" action what="polling loop started" gateway="$TARGET"
 }
 
