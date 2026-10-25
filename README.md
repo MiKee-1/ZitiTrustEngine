@@ -116,6 +116,7 @@ scenarios/control/run.sh                  # no attack: normal behaviour
 scenarios/poller-stopped/run.sh           # reference case: polling loop stopped
 scenarios/write-tampered-poller/run.sh    # scenario 2: Modbus writes from the tampered poller
 scenarios/write-separate-process/run.sh   # scenario 2: Modbus writes from a separate process
+scenarios/fake-poller/run.sh              # scenario 3: declared posture in order, osquery tells otherwise
 ```
 
 One directory per scenario under `scenarios/`, holding its `run.sh` and
@@ -150,6 +151,15 @@ separate tool opens its own connection. Each write is recorded in
 `logs/runs/<run id>.writes.log`, and the `plc`'s holding registers are read
 (from inside the `plc`, so Zeek does not see it) before and after the
 attack. The written values stay in the `plc` until it is restarted.
+
+The scenario 3 run, `fake-poller`, replaces the polling loop with a fake
+`gateway-poller` that only sleeps: same executable, so the process posture
+check keeps allowing the dial. Meanwhile `attacker.py` posts made-up
+readings to the historian at the loop's own times, carrying on from its
+last read, without reading the `plc`. The fake process is started before
+the real loop is stopped, and the other way round at the end, so the
+posture never turns false. Each post is recorded in
+`logs/runs/<run id>.posts.log`.
 
 After each run, stop the lab and move `logs/` aside before the next one,
 so that every run has its own set of logs.
