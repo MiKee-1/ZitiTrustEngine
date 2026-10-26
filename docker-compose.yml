@@ -274,6 +274,43 @@ services:
         aliases: [gateway-b]
 
   # ---------------------------------------------------------------------
+  # attacker: the machine of scenario 1 (scenarios/cloned-identity/), on
+  # the "ot" network with an IP of its own. In the "attacker" profile, so
+  # `docker compose up` leaves it out; the scenario starts it.
+  #
+  # Same image as the gateways, but none of their volumes: it has no
+  # identity and no log directory of the lab. The scenario copies
+  # gateway-a's identity into it explicitly, the theft under study. Its
+  # entrypoint only keeps it up: the scenario starts the tunneler and the
+  # polling loop itself, and osqueryd never runs here (the attacker's
+  # machine is not a source of the TrustEngine). Same capabilities as a
+  # gateway: SYS_PTRACE so that its tunneler sees its own gateway-poller
+  # and the process posture check passes.
+  # ---------------------------------------------------------------------
+  attacker:
+    profiles: [attacker]
+    build:
+      context: ./gateway
+      args:
+        ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
+    init: true
+    entrypoint: ["sleep", "infinity"]
+    environment:
+      - GATEWAY_ID=gateway-a
+      - HISTORIAN_IP=${HISTORIAN_IT_IP}
+      - HISTORIAN_PORT=5000
+      - PLC_IP=${PLC_OT_IP}
+      - PLC_PORT=${PLC_PORT}
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      ot:
+        ipv4_address: ${ATTACKER_OT_IP}
+
+  # ---------------------------------------------------------------------
   # plc: synthetic Modbus/TCP server, "ot" network only. Stands in for the
   # physical device the gateways poll.
   # ---------------------------------------------------------------------

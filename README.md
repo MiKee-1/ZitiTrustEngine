@@ -117,6 +117,7 @@ scenarios/poller-stopped/run.sh           # reference case: polling loop stopped
 scenarios/write-tampered-poller/run.sh    # scenario 2: Modbus writes from the tampered poller
 scenarios/write-separate-process/run.sh   # scenario 2: Modbus writes from a separate process
 scenarios/fake-poller/run.sh              # scenario 3: declared posture in order, osquery tells otherwise
+scenarios/cloned-identity/run.sh          # scenario 1: gateway-a's identity used in parallel from another machine
 ```
 
 One directory per scenario under `scenarios/`, holding its `run.sh` and
@@ -160,6 +161,19 @@ last read, without reading the `plc`. The fake process is started before
 the real loop is stopped, and the other way round at the end, so the
 posture never turns false. Each post is recorded in
 `logs/runs/<run id>.posts.log`.
+
+The scenario 1 run, `cloned-identity`, copies gateway-a's enrolled
+identity to the `attacker` service, a machine of its own on the `ot`
+network (`ATTACKER_OT_IP`) in the Compose profile `attacker`, so `up`
+leaves it out. It has the gateways' image but none of their volumes; the
+script starts it idle before the run. During the attack phase it runs the
+unmodified polling loop as gateway-a, with its own `ziti-edge-tunnel` and
+the copied identity, while gateway-a keeps running as usual:
+`CLONE_INTERVAL=10` (default) polls at the same rhythm,
+`CLONE_INTERVAL=3` at a different one. At the end of the phase the
+container is removed, along with its copy of the identity. The clone's
+polling loop and tunneler output go to
+`logs/runs/<run id>.clone-poller.log` and `.clone-tunnel.log`.
 
 After each run, stop the lab and move `logs/` aside before the next one,
 so that every run has its own set of logs.
