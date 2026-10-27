@@ -1,5 +1,26 @@
 services:
   # ---------------------------------------------------------------------
+  # One-shot: creates the logs/ directories the containers write into,
+  # writable by everyone. When a bind-mount source is missing, Docker
+  # creates it as root with mode 755, and the controller (which runs as
+  # uid 2171) then panics on its first write. logs/ itself is made
+  # writable too, for the analysis scripts run from the host. osquery/ and
+  # poller/ hold one subdirectory per gateway: each gateway mounts only its
+  # own.
+  # ---------------------------------------------------------------------
+  logs-init:
+    image: alpine:3.20
+    volumes:
+      - ./logs:/logs
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        cd /logs &&
+        dirs="controller zeek osquery poller identities posture
+        osquery/gateway-a osquery/gateway-b poller/gateway-a poller/gateway-b" &&
+        mkdir -p $$dirs && chmod 777 . $$dirs
+
+  # ---------------------------------------------------------------------
   # Ziti controller: together with the router, the only component with an
   # interface on both "ot" and "it". The Edge Client API (1280) stays
   # reachable from both networks: the gateways need it for the dial. The
@@ -19,6 +40,9 @@ services:
       timeout: 3s
       retries: 40
     env_file: [./.env]
+    depends_on:
+      logs-init:
+        condition: service_completed_successfully
     environment:
       - ZITI_CTRL_NAME=${ZITI_CTRL_NAME}
       - ZITI_CTRL_EDGE_ADVERTISED_ADDRESS=${ZITI_CTRL_EDGE_ADVERTISED_ADDRESS}
@@ -158,12 +182,23 @@ services:
   # Each gateway mounts only its own subdirectory of the identity volume, so
   # it can't read the other gateway's or ziti-host's certificate and key. It is
   # writable: the gateway enrolls its identity there on first start.
+  #
+  # Likewise for its logs: only its own subdirectories of logs/osquery and
+  # logs/poller, so a compromised gateway can't rewrite the other one's logs.
+  #
+  # init: Docker's init runs as PID 1 and reaps the processes that end in the
+  # gateway. The entrypoint and the scenario scripts start the tunneler,
+  # osqueryd and the polling loop so that PID 1 adopts them; without a
+  # reaping PID 1 every stopped polling loop would stay behind as a zombie,
+  # an extra process in osquery's process list that nothing in the
+  # scenario put there.
   # ---------------------------------------------------------------------
   gateway-a:
     build:
       context: ./gateway
       args:
         ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
+    init: true
     depends_on:
       ziti-setup:
         condition: service_completed_successfully
@@ -191,8 +226,8 @@ services:
         target: /identities
         volume:
           subpath: gateway-a
-      - ./logs/osquery:/logs/osquery
-      - ./logs/poller:/logs/poller
+      - ./logs/osquery/gateway-a:/logs/osquery
+      - ./logs/poller/gateway-a:/logs/poller
     networks:
       ot:
         ipv4_address: ${GATEWAY_A_OT_IP}
@@ -203,6 +238,7 @@ services:
       context: ./gateway
       args:
         ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
+    init: true
     depends_on:
       ziti-setup:
         condition: service_completed_successfully
@@ -230,12 +266,49 @@ services:
         target: /identities
         volume:
           subpath: gateway-b
-      - ./logs/osquery:/logs/osquery
-      - ./logs/poller:/logs/poller
+      - ./logs/osquery/gateway-b:/logs/osquery
+      - ./logs/poller/gateway-b:/logs/poller
     networks:
       ot:
         ipv4_address: ${GATEWAY_B_OT_IP}
         aliases: [gateway-b]
+
+  # ---------------------------------------------------------------------
+  # attacker: the machine of scenario 1 (scenarios/cloned-identity/), on
+  # the "ot" network with an IP of its own. In the "attacker" profile, so
+  # `docker compose up` leaves it out; the scenario starts it.
+  #
+  # Same image as the gateways, but none of their volumes: it has no
+  # identity and no log directory of the lab. The scenario copies
+  # gateway-a's identity into it explicitly, the theft under study. Its
+  # entrypoint only keeps it up: the scenario starts the tunneler and the
+  # polling loop itself, and osqueryd never runs here (the attacker's
+  # machine is not a source of the TrustEngine). Same capabilities as a
+  # gateway: SYS_PTRACE so that its tunneler sees its own gateway-poller
+  # and the process posture check passes.
+  # ---------------------------------------------------------------------
+  attacker:
+    profiles: [attacker]
+    build:
+      context: ./gateway
+      args:
+        ZITI_TUNNEL_VERSION: ${ZITI_TUNNEL_VERSION}
+    init: true
+    entrypoint: ["sleep", "infinity"]
+    environment:
+      - GATEWAY_ID=gateway-a
+      - HISTORIAN_IP=${HISTORIAN_IT_IP}
+      - HISTORIAN_PORT=5000
+      - PLC_IP=${PLC_OT_IP}
+      - PLC_PORT=${PLC_PORT}
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      ot:
+        ipv4_address: ${ATTACKER_OT_IP}
 
   # ---------------------------------------------------------------------
   # plc: synthetic Modbus/TCP server, "ot" network only. Stands in for the

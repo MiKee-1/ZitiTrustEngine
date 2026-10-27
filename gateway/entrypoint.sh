@@ -1,8 +1,28 @@
 #!/bin/bash
-# Gateway entrypoint: starts ziti-edge-tunnel in the background with this
-# gateway's own identity, then stays up idle. Nothing else starts on its
-# own: the polling loop (poller.py), osqueryd (osqueryd.sh) and the checks
-# (test_dial.py) are started by hand with `docker compose exec`.
+# Gateway entrypoint: starts ziti-edge-tunnel with this gateway's own
+# identity, then osqueryd (osqueryd.sh) and the polling loop (poller.py), all
+# in the background, and stays up idle, like a gateway whose services start
+# at boot. Only the checks (test_dial.py) are started by hand.
+#
+# The polling loop and osqueryd keep pid files (/run/poller.pid,
+# /var/osquery/osqueryd.pidfile) that refuse a second instance. Stopping
+# the stack kills them without a chance to clean up, so those files are
+# left behind, and on the next start the pids are handed out in the same
+# order: a new process could find its own pid in an old file and exit.
+# Nothing runs yet at this point, so any pid file found here is stale and
+# is removed.
+#
+# PID 1 is Docker's init (init: true in docker-compose.yml), which reaps
+# the processes that end; this script runs under it and ends as
+# sleep infinity. The three services are started from a subshell that
+# exits right away, so that PID 1 adopts them: osquery reports parent 1,
+# and when one is stopped PID 1 reaps it instead of leaving a zombie. The
+# scenario scripts restart the polling loop the same way, so the restarted
+# one looks the same.
+#
+# If the tunneler is not ready yet, the polling loop's first cycles fail
+# and it carries on; the first cycle after the tunneler is up is denied by
+# the posture check, as on every start of the loop.
 #
 # The tunneler creates the ziti0 tun interface, routes 100.64.0.0/10 through
 # it, and prepends its own resolver (100.64.0.2) to /etc/resolv.conf: names
@@ -33,6 +53,11 @@ if [ ! -f "${IDENTITY_FILE}" ]; then
 fi
 
 echo "[entrypoint] starting ziti-edge-tunnel for ${GATEWAY_ID}"
-ziti-edge-tunnel run -i "${IDENTITY_FILE}" &
+( ziti-edge-tunnel run -i "${IDENTITY_FILE}" & )
+
+rm -f /run/poller.pid /var/osquery/osqueryd.pidfile
+echo "[entrypoint] starting osqueryd and the polling loop"
+( bash /app/osqueryd.sh < /dev/null > /dev/null 2>&1 & )
+( gateway-poller poller.py < /dev/null > /dev/null 2>&1 & )
 
 exec sleep infinity
